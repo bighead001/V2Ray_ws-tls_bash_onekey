@@ -484,7 +484,11 @@ port_exist_check() {
 acme() {
     "$HOME"/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
-    if "$HOME"/.acme.sh/acme.sh --issue --insecure -d "${domain}" --standalone -k ec-256 --force; then
+    # 创建验证目录
+    mkdir -p /var/www/html/.well-known/acme-challenge
+    
+    # 使用 webroot 模式，指定网站根目录
+    if "$HOME"/.acme.sh/acme.sh --issue -d "${domain}" --webroot /var/www/html -k ec-256 --force; then
         echo -e "${OK} ${GreenBG} SSL 证书生成成功 ${Font}"
         sleep 2
         mkdir -p /data
@@ -498,7 +502,6 @@ acme() {
         exit 1
     fi
 }
-
 # 添加 V2Ray TLS 配置
 v2ray_conf_add_tls() {
     cd /etc/v2ray || exit
@@ -541,13 +544,30 @@ nginx_conf_add() {
     touch ${nginx_conf_dir}/v2ray.conf
     cat >${nginx_conf_dir}/v2ray.conf <<EOF
 server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+    
+    # Acme.sh 证书验证目录
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    
+    # 其他 HTTP 请求重定向到 HTTPS (安装初期先不重定向，或者保持原样，等证书好了再改)
+    # 这里为了确保证书能申请下来，我们先只放验证目录，或者你可以选择直接返回 404
+    location / {
+        return 404; 
+    }
+}
+
+server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     ssl_certificate       /data/v2ray.crt;
     ssl_certificate_key   /data/v2ray.key;
     ssl_protocols         TLSv1.3;
     ssl_ciphers           TLS13-AES-256-GCM-SHA384:TLS13-CHACHA20-POLY1305-SHA256:TLS13-AES-128-GCM-SHA256:TLS13-AES-128-CCM-8-SHA256:TLS13-AES-128-CCM-SHA256:EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+ECDSA+AES128:EECDH+aRSA+AES128:RSA+AES128:EECDH+ECDSA+AES256:EECDH+aRSA+AES256:RSA+AES256:EECDH+ECDSA+3DES:EECDH+aRSA+3DES:RSA+3DES:!MD5;
-    server_name           serveraddr.com;
+    server_name           ${domain};
     index index.html index.htm;
     root  /home/wwwroot/3DCEList;
     error_page 400 = /400.html;
@@ -557,11 +577,11 @@ server {
     ssl_stapling_verify on;
     add_header Strict-Transport-Security "max-age=31536000";
 
-    location /ray/
+    location ${camouflage}
     {
     proxy_redirect off;
     proxy_read_timeout 1200s;
-    proxy_pass http://127.0.0.1:10000;
+    proxy_pass http://127.0.0.1:${PORT};
     proxy_http_version 1.1;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -571,19 +591,17 @@ server {
     proxy_set_header Early-Data \$ssl_early_data;
     }
 }
-server {
-    listen 80;
-    listen [::]:80;
-    server_name serveraddr.com;
-    return 301 https://use.shadowsocksr.win\$request_uri;
-}
 EOF
 
-    modify_nginx_port
-    modify_nginx_other
+    # 注意：这里不再调用 modify_nginx_port 和 modify_nginx_other 来修改 80 端口部分，
+    # 因为我们在上面模板里已经硬编码了域名和路径逻辑的一部分。
+    # 但为了兼容后续修改，我们仍然需要修改 443 端口的代理端口和路径
+    
+    # 重新应用动态变量修正 (针对 443 部分)
+    sed -i "s|proxy_pass http://127.0.0.1:${PORT};|proxy_pass http://127.0.0.1:${PORT};|" ${nginx_conf}
+    
     judge "Nginx 配置修改"
 }
-
 # 启动服务（增加配置预检）
 start_process_systemd() {
     systemctl daemon-reload
@@ -903,6 +921,7 @@ install_v2ray_ws_tls() {
     nginx_exist_check
     v2ray_conf_add_tls
     nginx_conf_add
+    systemctl restart nginx  # <--- 新增这一行，确保 Nginx 以新的 80 端口配置运行
     web_camouflage
     ssl_judge_and_install
     vmess_qr_config_tls_ws
