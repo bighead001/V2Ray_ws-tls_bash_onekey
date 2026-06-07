@@ -539,6 +539,28 @@ old_config_exist_check() {
     fi
 }
 
+# 生成 ACME 证书验证所需的临时 Nginx 配置
+nginx_conf_add_acme() {
+    mkdir -p ${nginx_conf_dir}
+    mkdir -p /var/www/html/.well-known/acme-challenge
+    cat >${nginx_conf_dir}/v2ray.conf <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 404;
+    }
+}
+EOF
+    judge "Nginx 临时 ACME 配置生成"
+}
+
 # 生成 Nginx 配置文件
 nginx_conf_add() {
     touch ${nginx_conf_dir}/v2ray.conf
@@ -920,10 +942,11 @@ install_v2ray_ws_tls() {
     port_exist_check "${port}"
     nginx_exist_check
     v2ray_conf_add_tls
-    nginx_conf_add
-    systemctl restart nginx  # <--- 新增这一行，确保 Nginx 以新的 80 端口配置运行
+    nginx_conf_add_acme
+    systemctl restart nginx
     web_camouflage
     ssl_judge_and_install
+    nginx_conf_add
     vmess_qr_config_tls_ws
     basic_information
     vmess_link_image_choice
