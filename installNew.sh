@@ -558,20 +558,28 @@ acme() {
 }
 # 添加 V2Ray TLS 配置
 v2ray_conf_add_tls() {
+    mkdir -p /etc/v2ray
     cd /etc/v2ray || exit
-    wget --no-check-certificate https://raw.githubusercontent.com/bighead001/V2Ray_ws-tls_bash_onekey/${github_branch}/tls/config.json -O config.json
-    modify_path
-    modify_inbound_port
-    modify_UUID
+    if wget --no-check-certificate https://raw.githubusercontent.com/bighead001/V2Ray_ws-tls_bash_onekey/${github_branch}/tls/config.json -O config.json; then
+        modify_path
+        modify_inbound_port
+        modify_UUID
+    else
+        error_exit "下载 V2Ray TLS 配置失败，请检查网络或 Github 地址"
+    fi
 }
 
 # 添加 V2Ray H2 配置
 v2ray_conf_add_h2() {
+    mkdir -p /etc/v2ray
     cd /etc/v2ray || exit
-    wget --no-check-certificate https://raw.githubusercontent.com/bighead001/V2Ray_ws-tls_bash_onekey/${github_branch}/http2/config.json -O config.json
-    modify_path
-    modify_inbound_port
-    modify_UUID
+    if wget --no-check-certificate https://raw.githubusercontent.com/bighead001/V2Ray_ws-tls_bash_onekey/${github_branch}/http2/config.json -O config.json; then
+        modify_path
+        modify_inbound_port
+        modify_UUID
+    else
+        error_exit "下载 V2Ray H2 配置失败，请检查网络或 Github 地址"
+    fi
 }
 
 # 检查是否存在旧配置
