@@ -689,6 +689,9 @@ EOF
 # 启动服务（增加配置预检）
 start_process_systemd() {
     systemctl daemon-reload
+    # Ensure v2ray log directory exists and log files are present
+    mkdir -p /var/log/v2ray
+    touch /var/log/v2ray/access.log /var/log/v2ray/error.log
     chown -R root:root /var/log/v2ray/
     
     # 确保 Nginx 用户能读取证书和网页
