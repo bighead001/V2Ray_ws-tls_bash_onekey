@@ -626,27 +626,31 @@ EOF
 # 生成 Nginx 配置文件
 nginx_conf_add() {
     touch ${nginx_conf_dir}/v2ray.conf
+    
+    # 确定监听端口，默认为 443，如果用户自定义了 port 且不为 443，则使用自定义端口
+    # 注意：在 install_v2ray_ws_tls 流程中，port_alterid_set 已经设置了 port 变量
+    local listen_port=${port:-443}
+
     cat >${nginx_conf_dir}/v2ray.conf <<EOF
 server {
     listen 80;
     listen [::]:80;
     server_name ${domain};
     
-    # Acme.sh 证书验证目录
+    # Acme.sh 证书验证目录 (用于首次申请和自动续期)
     location /.well-known/acme-challenge/ {
         root /var/www/html;
     }
     
-    # 其他 HTTP 请求重定向到 HTTPS (安装初期先不重定向，或者保持原样，等证书好了再改)
-    # 这里为了确保证书能申请下来，我们先只放验证目录，或者你可以选择直接返回 404
+    # 其他 HTTP 请求重定向到 HTTPS
     location / {
-        return 404; 
+        return 301 https://\$host\$request_uri;
     }
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    listen ${listen_port} ssl http2;
+    listen [::]:${listen_port} ssl http2;
     ssl_certificate       /data/v2ray.crt;
     ssl_certificate_key   /data/v2ray.key;
     ssl_protocols         TLSv1.3;
@@ -656,15 +660,22 @@ server {
     root  /home/wwwroot/3DCEList;
     error_page 400 = /400.html;
 
+    # 启用 0-RTT
     ssl_early_data on;
     ssl_stapling on;
     ssl_stapling_verify on;
     add_header Strict-Transport-Security "max-age=31536000";
 
+    # Acme.sh 证书验证目录 (用于自动续期，必须存在于 HTTPS 块中以防重定向循环或验证失败)
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
     location ${camouflage}
     {
     proxy_redirect off;
     proxy_read_timeout 1200s;
+    # 直接使用变量 PORT，确保与 V2Ray 配置一致
     proxy_pass http://127.0.0.1:${PORT};
     proxy_http_version 1.1;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -677,15 +688,10 @@ server {
 }
 EOF
 
-    # 注意：这里不再调用 modify_nginx_port 和 modify_nginx_other 来修改 80 端口部分，
-    # 因为我们在上面模板里已经硬编码了域名和路径逻辑的一部分。
-    # 但为了兼容后续修改，我们仍然需要修改 443 端口的代理端口和路径
-    
-    # 重新应用动态变量修正 (针对 443 部分)
-    sed -i "s|proxy_pass http://127.0.0.1:${PORT};|proxy_pass http://127.0.0.1:${PORT};|" ${nginx_conf}
-    
-    judge "Nginx 配置修改"
+    judge "Nginx 配置生成"
 }
+
+
 # 启动服务（增加配置预检）
 start_process_systemd() {
     systemctl daemon-reload
