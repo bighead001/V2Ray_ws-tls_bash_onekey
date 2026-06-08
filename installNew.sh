@@ -9,6 +9,22 @@
 #	Official document: www.v2ray.com
 #====================================================
 
+
+#==========================================
+# 主要流程梳理
+# 检查 root 权限。
+# 识别系统类型（CentOS/Debian/Ubuntu），初始化包管理器。
+# 安装 dbus、基础依赖、chrony、cron/crond、haveged 等。
+# 系统优化：文件句柄、SELinux 关闭。
+# 域名解析检查、端口占用检查。
+# 安装 V2Ray 核心。
+# Nginx 检查/安装。
+# 生成临时 ACME 验证配置并启动 Nginx。
+# 申请证书、生成最终 Nginx 配置。
+# 启动 Nginx/V2Ray，设置开机自启。
+# 更新证书自动续期 Cron。
+#========================================================
+
 PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:~/bin
 export PATH
 
@@ -53,6 +69,26 @@ amce_sh_file="/root/.acme.sh/acme.sh"
 ssl_update_file="/usr/bin/ssl_update.sh"
 
 old_config_status="off"
+install_marker="/tmp/v2ray_ws_tls_install_in_progress"
+
+cleanup_partial_installation() {
+    if [[ ! -f ${install_marker} ]]; then
+        return 0
+    fi
+
+    echo -e "${Warning} ${RedBG} 检测到安装异常退出，正在清理残留文件... ${Font}"
+    systemctl stop nginx v2ray 2>/dev/null || true
+    rm -f "${nginx_conf_dir}/v2ray.conf"
+    rm -f /data/v2ray.crt /data/v2ray.key
+    rm -rf /home/wwwroot
+    rm -f "${install_marker}"
+}
+
+error_exit() {
+    echo -e "${Error} ${RedBG} $1 ${Font}"
+    cleanup_partial_installation
+    exit 1
+}
 
 # 移动旧版本配置信息，兼容小于 1.1.0 的版本
 [[ -f "/etc/v2ray/vmess_qr.json" ]] && mv /etc/v2ray/vmess_qr.json $v2ray_qr_config_file
@@ -118,6 +154,7 @@ judge() {
         echo -e "${OK} ${GreenBG} $1 完成 ${Font}"
         sleep 1
     else
+        cleanup_partial_installation
         echo -e "${Error} ${RedBG} $1 失败${Font}"
         exit 1
     fi
@@ -299,8 +336,14 @@ web_camouflage() {
     if git clone https://github.com/wulabing/3DCEList.git; then
         judge "web 站点伪装"
     else
-        echo -e "${Error} ${RedBG} 伪装站点克隆失败，请检查网络 ${Font}"
-        echo -e "${Warning} ${RedBG} V2Ray 仍可运行，但缺少伪装页面可能增加被识别风险 ${Font}"
+        echo -e "${Warning} ${RedBG} 伪装站点克隆失败，使用本地占位页面 ${Font}"
+        mkdir -p "$web_root/3DCEList"
+        cat >"$web_root/3DCEList/index.html" <<'EOF'
+<html><head><meta charset="utf-8"><title>V2Ray</title></head>
+<body><h1>V2Ray WS+TLS</h1><p>伪装站点内容不可用，请稍后检查。</p></body>
+</html>
+EOF
+        echo -e "${Warning} ${RedBG} 已创建占位页面 ${Font}"
     fi
 }
 
@@ -333,17 +376,21 @@ nginx_exist_check() {
     # 检查命令是否存在
     if command -v nginx &> /dev/null; then
         echo -e "${OK} ${GreenBG} 检测到 Nginx 已安装 ${Font}"
-        
-        # 检查服务状态
+
         if systemctl is-active --quiet nginx; then
             echo -e "${Warning} ${RedBG} Nginx 正在运行中 ${Font}"
             echo -e "${Warning} ${RedBG} 将跳过 Nginx 安装步骤，直接使用现有服务 ${Font}"
         else
             echo -e "${OK} ${GreenBG} Nginx 未运行，尝试启动... ${Font}"
             systemctl start nginx
+            if [[ $? -ne 0 ]]; then
+                error_exit "Nginx 启动失败，请检查 /etc/nginx/nginx.conf"
+            fi
+            judge "Nginx 启动"
         fi
-        
-        # 确保路径变量正确
+
+        systemctl enable nginx 2>/dev/null || true
+
         nginx_conf_dir="/etc/nginx/conf.d"
         nginx_conf="${nginx_conf_dir}/v2ray.conf"
         sleep 2
@@ -406,6 +453,13 @@ EOF
             sed -i '/http {/a \    include /etc/nginx/conf.d/*.conf;' /etc/nginx/nginx.conf
         fi
     fi
+
+    nginx -t
+    judge "Nginx 配置文件语法检查"
+
+    systemctl enable nginx
+    systemctl start nginx
+    judge "Nginx 启动"
 
     echo -e "${OK} ${GreenBG} Nginx 安装及基础配置完成 ${Font}"
 }
@@ -930,6 +984,7 @@ judge_mode() {
 # 安装 WS+TLS 模式
 install_v2ray_ws_tls() {
     is_root
+    touch "${install_marker}"
     check_system
     chrony_install
     dependency_install
@@ -943,7 +998,10 @@ install_v2ray_ws_tls() {
     nginx_exist_check
     v2ray_conf_add_tls
     nginx_conf_add_acme
+    nginx -t >/dev/null 2>&1
+    judge "Nginx ACME 配置检查"
     systemctl restart nginx
+    judge "Nginx 重启"
     web_camouflage
     ssl_judge_and_install
     nginx_conf_add
@@ -955,11 +1013,13 @@ install_v2ray_ws_tls() {
     start_process_systemd
     enable_process_systemd
     acme_cron_update
+    rm -f "${install_marker}"
 }
 
 # 安装 H2 模式
 install_v2_h2() {
     is_root
+    touch "${install_marker}"
     check_system
     chrony_install
     dependency_install
@@ -978,6 +1038,7 @@ install_v2_h2() {
     show_information
     start_process_systemd
     enable_process_systemd
+    rm -f "${install_marker}"
 }
 
 # 脚本自我更新
